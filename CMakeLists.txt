@@ -109,7 +109,7 @@ function(dingobench_resources target)
 endfunction()
 dingobench_resources(DingoBench)
 install(TARGETS DingoBench DingoBenchReceiver RUNTIME DESTINATION .)
-install(FILES LICENSE DESTINATION .)
+install(FILES LICENSE BRANDING.md DESTINATION .)
 install(FILES "${material_dir}/LICENSE.txt" "${material_dir}/NOTICE.txt"
         DESTINATION share/licenses/DingoBench/MaterialSymbols)
 

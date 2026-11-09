@@ -1,0 +1,194 @@
+name: Build draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version from CMakeLists.txt
+        required: true
+        default: '0.1.0'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: draft-release-${{ inputs.version }}
+
+env:
+  VERSION: ${{ inputs.version }}
+  QT_VERSION: '6.11.3'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check release ref and version
+        shell: bash
+        run: |
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          grep -Fx "project(DingoBench VERSION $VERSION LANGUAGES CXX)" CMakeLists.txt
+
+  windows:
+    needs: prepare
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_artifacts: true
+
+  linux:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: DEB
+            image: ubuntu:24.04
+            extension: deb
+          - format: RPM
+            image: fedora:44
+            extension: rpm
+    container: ${{ matrix.image }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      FORMAT: ${{ matrix.format }}
+      EXTENSION: ${{ matrix.extension }}
+    steps:
+      - name: Install native build and packaging tools
+        run: |
+          if [[ "$FORMAT" == DEB ]]; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y --no-install-recommends ca-certificates git g++ cmake ninja-build \
+              python3 qt6-base-dev qt6-svg-dev libgl1-mesa-dev libxkbcommon-dev dpkg-dev \
+              libqt6svg6 qt6-qpa-plugins xvfb xauth fonts-dejavu-core
+          else
+            dnf install -y ca-certificates git gcc-c++ cmake ninja-build python3 \
+              qt6-qtbase-devel qt6-qtsvg-devel rpm-build xorg-x11-server-Xvfb xorg-x11-xauth dejavu-sans-fonts
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build, test, and package
+        run: |
+          dcmtk="$RUNNER_TEMP/dingobench-dcmtk"
+          build="$RUNNER_TEMP/dingobench-build"
+          python3 scripts/build_dcmtk.py --work "$dcmtk" --jobs 4
+          cmake --preset ci-release -B "$build" -DDCMTK_ROOT="$dcmtk/sdk" \
+            -DDINGOBENCH_DCMTK_TOOLS_DIR="$dcmtk/sdk/bin"
+          cmake --build "$build" --parallel 4
+          ctest --test-dir "$build" --output-on-failure --no-tests=error --parallel 2
+          bash scripts/package_linux.sh "$FORMAT" "$VERSION" "$build" "$dcmtk" dist
+      - name: Install and smoke-test the package
+        run: |
+          package="$PWD/dist/DingoBench-$VERSION-linux-x86_64.$EXTENSION"
+          if [[ "$FORMAT" == DEB ]]; then
+            apt-get install -y "$package"
+            test "$(dpkg-query -W -f='${Version}' dingobench)" = "$VERSION"
+          else
+            dnf install -y "$package"
+            test "$(rpm -q --qf '%{VERSION}' dingobench)" = "$VERSION"
+          fi
+          test "$(dingobench --version)" = "DingoBench $VERSION"
+          /usr/libexec/dingobench/wlmscpfs --version | grep -F 'wlmscpfs v3.7.1'
+          test -x /usr/libexec/dingobench/DingoBenchReceiver
+          export DINGOBENCH_TEST_APP=/usr/bin/dingobench
+          xvfb-run -a "$RUNNER_TEMP/dingobench-build/dingobench_verification_test" applicationEcho
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-linux-${{ matrix.extension }}
+          path: dist/*.${{ matrix.extension }}
+          if-no-files-found: error
+          compression-level: 0
+
+  macos:
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Qt for macOS
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aqt"
+          "$RUNNER_TEMP/aqt/bin/python" -m pip install aqtinstall==3.2.1
+          "$RUNNER_TEMP/aqt/bin/python" -m aqt install-qt mac desktop "$QT_VERSION" clang_64 \
+            --base https://download.qt.io --outputdir "$RUNNER_TEMP/qt"
+      - name: Build, test, and package
+        run: |
+          test "$(uname -m)" = arm64
+          dcmtk="$RUNNER_TEMP/dingobench-dcmtk"
+          build="$RUNNER_TEMP/dingobench-build"
+          export Qt6_ROOT="$RUNNER_TEMP/qt/$QT_VERSION/macos"
+          python3 scripts/build_dcmtk.py --work "$dcmtk" --jobs 3
+          cmake --preset ci-release -B "$build" -DDCMTK_ROOT="$dcmtk/sdk" \
+            -DDINGOBENCH_DCMTK_TOOLS_DIR="$dcmtk/sdk/bin"
+          cmake --build "$build" --parallel 3
+          ctest --test-dir "$build" --output-on-failure --no-tests=error --parallel 2
+          bash scripts/package_macos.sh "$VERSION" "$build" "$dcmtk" "$Qt6_ROOT" dist
+      - name: Mount and smoke-test the DMG
+        run: |
+          mountpoint=$(mktemp -d)
+          hdiutil attach "dist/DingoBench-$VERSION-macos-arm64.dmg" -nobrowse -readonly -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          app="$mountpoint/DingoBench.app"
+          macos="$app/Contents/MacOS"
+          codesign --verify --deep --strict "$app"
+          test "$("$macos/DingoBench" --version)" = "DingoBench $VERSION"
+          "$macos/wlmscpfs" --version | grep -F 'wlmscpfs v3.7.1'
+          test -x "$macos/DingoBenchReceiver"
+          DINGOBENCH_TEST_APP="$macos/DingoBench" \
+            "$RUNNER_TEMP/dingobench-build/dingobench_verification_test" applicationEcho
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos
+          path: dist/*.dmg
+          if-no-files-found: error
+          compression-level: 0
+
+  draft:
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Verify assets and create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          assets=(
+            "DingoBench-$VERSION-windows-x64.zip"
+            "DingoBench-$VERSION-windows-x64-source.zip"
+            "DingoBench-$VERSION-linux-x86_64.deb"
+            "DingoBench-$VERSION-linux-x86_64.rpm"
+            "DingoBench-$VERSION-macos-arm64.dmg"
+          )
+          for asset in "${assets[@]}"; do test -s "$asset"; done
+          sha256sum "${assets[@]}" > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          - Windows x64 portable ZIP
+          - Linux x86_64 DEB tested on Ubuntu 24.04
+          - Linux x86_64 RPM tested on Fedora 44
+          - macOS Apple Silicon DMG tested on macOS 15. The app is ad-hoc signed and has no Apple notarization.
+
+          The corresponding source ZIP includes DingoBench and the pinned Qt and DCMTK source archives.
+          Use `SHA256SUMS.txt` to verify the downloads.
+          EOF
+          gh release create "v$VERSION" "${assets[@]}" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft \
+            --title "DingoBench $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
