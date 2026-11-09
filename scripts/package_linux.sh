@@ -40,6 +40,7 @@ cat > "$staging/CPackConfig.cmake" <<EOF
 set(CPACK_PACKAGE_NAME dingobench)
 set(CPACK_PACKAGE_VERSION "$version")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Desktop DICOM troubleshooting tool")
+set(CPACK_PACKAGE_DESCRIPTION "Verify DICOM peers, send and receive objects, query archives and worklists, and inspect protocol details.")
 set(CPACK_PACKAGE_CONTACT "Juan Pablo Devoto")
 set(CPACK_PACKAGE_FILE_NAME "DingoBench-$version-linux-x86_64")
 set(CPACK_INSTALLED_DIRECTORIES "$staging/root" "/")

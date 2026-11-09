@@ -110,7 +110,7 @@ jobs:
 
   macos:
     needs: prepare
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -184,7 +184,7 @@ jobs:
           - Windows x64 portable ZIP
           - Linux x86_64 DEB tested on Ubuntu 24.04
           - Linux x86_64 RPM tested on Fedora 44
-          - macOS Apple Silicon DMG tested on macOS 15. The app is ad-hoc signed and has no Apple notarization.
+          - macOS Apple Silicon DMG tested on macOS 26. The app is ad-hoc signed and has no Apple notarization.
 
           The corresponding source ZIP includes DingoBench and the pinned Qt and DCMTK source archives.
           Use `SHA256SUMS.txt` to verify the downloads.
