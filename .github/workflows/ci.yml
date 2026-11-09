@@ -1,0 +1,92 @@
+name: Build and test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: '6.11.3'
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Qt for MSVC x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = $env:QT_VERSION.Replace('.', '')
+          $url = "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_$version/qt6_${version}_msvc2022_64/qt.qt6.$version.win64_msvc2022_64"
+          $hashes = @{
+            qtbase = '68BE61B613B963DAF206834FDCC57DD3B84BAFF3082E50679E5846CA4A7A8B86'
+            qtsvg = 'E8C789E1A059601DD82114DD9560952891E7C8E94E1CB291166EB61D74800353'
+          }
+          $qt = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/qt"
+          foreach ($module in $hashes.Keys) {
+            $name = "$module-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z"
+            $archive = "$env:RUNNER_TEMP/$name"
+            curl.exe --fail --silent --show-error --location --retry 3 "$url/$env:QT_VERSION-0-202610220312$name" -o $archive
+            if ((Get-FileHash $archive).Hash -ne $hashes[$module]) { throw "SHA-256 mismatch for $name" }
+            tar.exe -xf $archive -C $qt.FullName
+          }
+      - name: Build DCMTK and run Release tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Visual Studio x64 tools were not found.' }
+          & "$vs/Common7/Tools/Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $env:Qt6_ROOT = "$env:RUNNER_TEMP/qt"
+          $dcmtk = "$env:RUNNER_TEMP/dingobench-dcmtk"
+          $build = "$env:RUNNER_TEMP/dingobench-build"
+          python scripts/build_dcmtk.py --work $dcmtk --jobs 4
+          cmake --preset ci-release -B $build "-DDCMTK_ROOT=$dcmtk/sdk" "-DDINGOBENCH_DCMTK_TOOLS_DIR=$dcmtk/sdk/bin"
+          cmake --build $build --parallel 4
+          try {
+            ctest --test-dir $build --output-on-failure --no-tests=error --parallel 2
+          } catch {
+            Get-ChildItem $build -Filter '*-qt.txt' | Select-String '^FAIL|^SKIP|^Totals'
+            throw
+          }
+          $dist = "$env:RUNNER_TEMP/dingobench-dist"
+          python scripts/package_windows.py --build $build --qt $env:Qt6_ROOT --dcmtk-work $dcmtk --downloads "$env:RUNNER_TEMP/dingobench-downloads" --output $dist
+          $zip = (Get-ChildItem $dist -Filter '*-windows-x64.zip').FullName
+          python scripts/test_portable_windows.py --zip $zip --build $build --qt $env:Qt6_ROOT --tools "$dcmtk/sdk/bin" --output "$env:RUNNER_TEMP/dingobench-portable-tests"
+
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ninja-build libgl1-mesa-dev libxkbcommon-dev fonts-dejavu-core python3-venv
+      - name: Install Qt for Linux x64
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aqt"
+          "$RUNNER_TEMP/aqt/bin/python" -m pip install aqtinstall==3.2.1
+          "$RUNNER_TEMP/aqt/bin/python" -m aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 --base https://download.qt.io --outputdir "$RUNNER_TEMP/qt"
+      - name: Build DCMTK and run Release tests
+        run: |
+          dcmtk="$RUNNER_TEMP/dingobench-dcmtk"
+          build="$RUNNER_TEMP/dingobench-build"
+          export Qt6_ROOT="$RUNNER_TEMP/qt/$QT_VERSION/gcc_64"
+          python3 scripts/build_dcmtk.py --work "$dcmtk" --jobs 4
+          cmake --preset ci-release -B "$build" -DDCMTK_ROOT="$dcmtk/sdk" -DDINGOBENCH_DCMTK_TOOLS_DIR="$dcmtk/sdk/bin"
+          cmake --build "$build" --parallel 4
+          ctest --test-dir "$build" --output-on-failure --no-tests=error --parallel 2
+

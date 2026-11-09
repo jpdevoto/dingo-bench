@@ -1,0 +1,7 @@
+Material Symbols Outlined by Google
+https://fonts.google.com/icons
+https://github.com/google/material-design-icons
+
+The bundled 24 px Outlined SVG subset is licensed under Apache License 2.0.
+The original SVG geometry is retained. DingoBench colors the symbols at render time.
+The keyboard_arrow_down.svg fill was changed for use in the shared Qt stylesheet.
