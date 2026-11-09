@@ -1,0 +1,125 @@
+name: Publish macOS preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency: macos-preview-v0.1.0-1
+
+env:
+  QT_VERSION: '6.11.3'
+  PREVIEW_TAG: v0.1.0-macos-preview.1
+  SOURCE_COMMIT: 311b4d2f78845aa1f623d60421aab8072f81043c
+  PACKAGE: DingoBench-0.1.0-macos-arm64
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/v0.1.0
+          path: release-source
+          persist-credentials: false
+      - name: Build v0.1.0 and package without running functional tests
+        working-directory: release-source
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          python3 -m venv "$RUNNER_TEMP/aqt"
+          "$RUNNER_TEMP/aqt/bin/python" -m pip install aqtinstall==3.2.1
+          "$RUNNER_TEMP/aqt/bin/python" -m aqt install-qt mac desktop "$QT_VERSION" clang_64 \
+            --base https://download.qt.io --outputdir "$RUNNER_TEMP/qt"
+          export Qt6_ROOT="$RUNNER_TEMP/qt/$QT_VERSION/macos"
+          dcmtk="$RUNNER_TEMP/dingobench-dcmtk"
+          build="$RUNNER_TEMP/dingobench-build"
+          python3 scripts/build_dcmtk.py --work "$dcmtk" --jobs 3
+          cmake --preset release -B "$build" -DBUILD_TESTING=OFF -DDCMTK_ROOT="$dcmtk/sdk"
+          cmake --build "$build" --parallel 3
+          bash "$GITHUB_WORKSPACE/scripts/package_macos.sh" 0.1.0 "$build" "$dcmtk" "$Qt6_ROOT" "$RUNNER_TEMP/dist"
+      - name: Archive corresponding source and verify checksums
+        working-directory: release-source
+        run: |
+          PYTHONPATH=scripts python3 - <<'PY'
+          import os
+          from pathlib import Path
+          from dependency_sources import DCMTK, QTBASE, QTSVG, fetch
+          from package_windows import source_files, write_zip
+
+          workspace = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          cache = temporary / "dingobench-dcmtk"
+          root = Path.cwd().resolve()
+          files = dict(source_files(root))
+          for relative in (".github/workflows/macos-preview.yml", "scripts/package_macos.sh"):
+              files[relative] = workspace / relative
+
+          instructions = temporary / "MACOS-PREVIEW.md"
+          instructions.write_text(
+              "# DingoBench 0.1.0 macOS Preview\n\n"
+              f"Application source commit: {os.environ['SOURCE_COMMIT']}\n\n"
+              "Use an Apple Silicon Mac with Xcode 26, CMake, Ninja, Python, and Qt 6.11.3. "
+              "See the Build and package step in .github/workflows/macos-preview.yml. "
+              "When building from this archive, run commands from DingoBench-source and invoke "
+              "scripts/package_macos.sh from that directory. "
+              "The pinned dependency archives are in the adjacent upstream directory.\n",
+              encoding="utf-8",
+          )
+          files["MACOS-PREVIEW.md"] = instructions
+          manifest = temporary / "SOURCE-FILES.txt"
+          manifest.write_text("\n".join(sorted(files)) + "\n", encoding="utf-8")
+          files["SOURCE-FILES.txt"] = manifest
+          entries = [(f"DingoBench-source/{name}", path) for name, path in files.items()]
+          entries.extend((f"upstream/{source.name}", fetch(source, cache / source.name))
+                         for source in (DCMTK, QTBASE, QTSVG))
+          write_zip(temporary / "dist" / f"{os.environ['PACKAGE']}-source.zip", entries)
+          PY
+          cd "$RUNNER_TEMP/dist"
+          shasum -a 256 "$PACKAGE.dmg" "$PACKAGE-source.zip" > SHA256SUMS.txt
+          shasum -a 256 -c SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-preview
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-preview
+          path: dist
+      - name: Publish the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          test -s "$PACKAGE.dmg"
+          test -s "$PACKAGE-source.zip"
+          sha256sum --check --strict SHA256SUMS.txt
+          cat > "$RUNNER_TEMP/preview-notes.md" <<'EOF'
+          **Experimental Apple Silicon build.** This DMG was built without running functional tests. It is ad-hoc signed and unnotarized.
+
+          Earlier automated macOS tests failed in Verification, Storage Send, Storage Receive, and Worklist Server. All four suites still failed when rerun serially. See the [macOS diagnostic run](https://github.com/jpdevoto/dingo-bench/actions/runs/42566978823).
+
+          This build needs validation on a physical Apple Silicon Mac with a DICOM peer. Check repeated C-ECHO, outbound and inbound C-STORE, and Worklist Server startup and queries over IPv4 and IPv6 before relying on those workflows.
+
+          The source ZIP contains the v0.1.0 application source, the preview packaging instructions, and the pinned upstream sources. Use SHA256SUMS.txt to verify the downloads.
+          EOF
+          gh release create "$PREVIEW_TAG" "$PACKAGE.dmg" "$PACKAGE-source.zip" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$SOURCE_COMMIT" --draft --prerelease --latest=false \
+            --title "DingoBench 0.1.0 macOS Preview" --notes-file "$RUNNER_TEMP/preview-notes.md"
+          gh release edit "$PREVIEW_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease --latest=false
