@@ -66,7 +66,7 @@ jobs:
           if [[ "$FORMAT" == DEB ]]; then
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
-            apt-get install -y --no-install-recommends ca-certificates git g++ cmake ninja-build \
+            apt-get install -y --no-install-recommends ca-certificates git g++ cmake ninja-build file \
               python3 qt6-base-dev qt6-svg-dev libgl1-mesa-dev libxkbcommon-dev dpkg-dev \
               libqt6svg6 qt6-qpa-plugins xvfb xauth fonts-dejavu-core
           else
@@ -108,54 +108,8 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  macos:
-    needs: prepare
-    runs-on: macos-26
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install Qt for macOS
-        run: |
-          python3 -m venv "$RUNNER_TEMP/aqt"
-          "$RUNNER_TEMP/aqt/bin/python" -m pip install aqtinstall==3.2.1
-          "$RUNNER_TEMP/aqt/bin/python" -m aqt install-qt mac desktop "$QT_VERSION" clang_64 \
-            --base https://download.qt.io --outputdir "$RUNNER_TEMP/qt"
-      - name: Build, test, and package
-        run: |
-          test "$(uname -m)" = arm64
-          dcmtk="$RUNNER_TEMP/dingobench-dcmtk"
-          build="$RUNNER_TEMP/dingobench-build"
-          export Qt6_ROOT="$RUNNER_TEMP/qt/$QT_VERSION/macos"
-          python3 scripts/build_dcmtk.py --work "$dcmtk" --jobs 3
-          cmake --preset ci-release -B "$build" -DDCMTK_ROOT="$dcmtk/sdk" \
-            -DDINGOBENCH_DCMTK_TOOLS_DIR="$dcmtk/sdk/bin"
-          cmake --build "$build" --parallel 3
-          ctest --test-dir "$build" --output-on-failure --no-tests=error --parallel 2
-          bash scripts/package_macos.sh "$VERSION" "$build" "$dcmtk" "$Qt6_ROOT" dist
-      - name: Mount and smoke-test the DMG
-        run: |
-          mountpoint=$(mktemp -d)
-          hdiutil attach "dist/DingoBench-$VERSION-macos-arm64.dmg" -nobrowse -readonly -mountpoint "$mountpoint"
-          trap 'hdiutil detach "$mountpoint"' EXIT
-          app="$mountpoint/DingoBench.app"
-          macos="$app/Contents/MacOS"
-          codesign --verify --deep --strict "$app"
-          test "$("$macos/DingoBench" --version)" = "DingoBench $VERSION"
-          "$macos/wlmscpfs" --version | grep -F 'wlmscpfs v3.7.1'
-          test -x "$macos/DingoBenchReceiver"
-          DINGOBENCH_TEST_APP="$macos/DingoBench" \
-            "$RUNNER_TEMP/dingobench-build/dingobench_verification_test" applicationEcho
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-macos
-          path: dist/*.dmg
-          if-no-files-found: error
-          compression-level: 0
-
   draft:
-    needs: [windows, linux, macos]
+    needs: [windows, linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -175,7 +129,6 @@ jobs:
             "DingoBench-$VERSION-windows-x64-source.zip"
             "DingoBench-$VERSION-linux-x86_64.deb"
             "DingoBench-$VERSION-linux-x86_64.rpm"
-            "DingoBench-$VERSION-macos-arm64.dmg"
           )
           for asset in "${assets[@]}"; do test -s "$asset"; done
           sha256sum "${assets[@]}" > SHA256SUMS.txt
@@ -184,7 +137,8 @@ jobs:
           - Windows x64 portable ZIP
           - Linux x86_64 DEB tested on Ubuntu 24.04
           - Linux x86_64 RPM tested on Fedora 44
-          - macOS Apple Silicon DMG tested on macOS 26. The app is ad-hoc signed and has no Apple notarization.
+
+          The macOS build is deferred.
 
           The corresponding source ZIP includes DingoBench and the pinned Qt and DCMTK source archives.
           Use `SHA256SUMS.txt` to verify the downloads.
