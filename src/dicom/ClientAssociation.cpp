@@ -318,8 +318,9 @@ OperationResult withClientAssociation(const profiles::Profile &source, const pro
 
     T_ASC_Association *rawAssociation = nullptr;
     capture.connection = "TCP connection attempted";
+    // Allow for DCMTK's whole-second clock so BoundedConnection's monotonic deadline wins.
     condition = ASC_requestAssociation(network.get(), params.get(), &rawAssociation, nullptr, nullptr,
-                                       DUL_NOBLOCK, timeouts.association);
+                                       DUL_NOBLOCK, timeouts.association + 1);
     std::unique_ptr<T_ASC_Association, decltype(&destroy<T_ASC_Association, ASC_destroyAssociation>)>
         association(rawAssociation, &destroy<T_ASC_Association, ASC_destroyAssociation>);
     if (association)
