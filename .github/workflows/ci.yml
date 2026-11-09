@@ -31,12 +31,13 @@ jobs:
             qtsvg = 'E8C789E1A059601DD82114DD9560952891E7C8E94E1CB291166EB61D74800353'
           }
           $qt = New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/qt"
+          $sevenZip = "$env:ProgramFiles/7-Zip/7z.exe"
           foreach ($module in $hashes.Keys) {
             $name = "$module-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z"
             $archive = "$env:RUNNER_TEMP/$name"
             curl.exe --fail --silent --show-error --location --retry 3 "$url/$env:QT_VERSION-0-202610220312$name" -o $archive
             if ((Get-FileHash $archive).Hash -ne $hashes[$module]) { throw "SHA-256 mismatch for $name" }
-            tar.exe -xf $archive -C $qt.FullName
+            & $sevenZip x "-o$($qt.FullName)" -y $archive
           }
       - name: Build DCMTK and run Release tests
         shell: pwsh
