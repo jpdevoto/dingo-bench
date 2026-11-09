@@ -16,13 +16,15 @@ DingoBench was created as a spiritual successor to TIANI JDicom. The original pr
 
 | Platform | Package | Availability |
 | --- | --- | --- |
-| Windows x64 | Portable ZIP | [Portable Windows guide](docs/PORTABLE.md) |
-| Linux | DEB | **Build pending** |
-| Linux | RPM | **Build pending** |
+| Windows x64 | Portable ZIP | [Download ZIP](https://github.com/jpdevoto/dingo-bench/releases/download/v0.1.0/DingoBench-0.1.0-windows-x64.zip) |
+| Linux x86_64 · Ubuntu 24.04 | DEB | [Download DEB](https://github.com/jpdevoto/dingo-bench/releases/download/v0.1.0/DingoBench-0.1.0-linux-x86_64.deb) |
+| Linux x86_64 · Fedora 44 | RPM | [Download RPM](https://github.com/jpdevoto/dingo-bench/releases/download/v0.1.0/DingoBench-0.1.0-linux-x86_64.rpm) |
 | macOS | macOS build | **Build pending** |
 
 1. Extract the entire Windows x64 ZIP to a local folder.
 2. Run `DingoBench.exe` from that folder. Keep the DLLs and resource folders alongside the executable.
+
+See the [Portable Windows guide](docs/PORTABLE.md) for details.
 
 ## Verify a peer and run DICOM operations
 
@@ -82,7 +84,7 @@ cmake --build --preset ci-release
 ctest --preset ci-release
 ```
 
-The [CI workflow](.github/workflows/ci.yml) builds and tests on Windows and Linux. It also assembles and tests the Windows portable ZIP. The Linux CI job builds from source. DEB and RPM packages are pending.
+The [CI workflow](.github/workflows/ci.yml) builds and tests on Windows and Linux. The [release workflow](.github/workflows/release.yml) tests the Windows ZIP, Ubuntu DEB, and Fedora RPM before attaching them to a draft release.
 
 ## Directory layout
 
