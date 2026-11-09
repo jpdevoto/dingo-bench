@@ -21,6 +21,8 @@ DingoBench was created as a spiritual successor to TIANI JDicom. The original pr
 | Linux x86_64 · Fedora 44 | RPM | [Download RPM](https://github.com/jpdevoto/dingo-bench/releases/download/v0.1.0/DingoBench-0.1.0-linux-x86_64.rpm) |
 | macOS | macOS build | **Build pending** |
 
+An experimental Apple Silicon preview is available for manual testing. This build is unnotarized and skipped functional tests. Earlier automated runs found DICOM networking failures. [Download the macOS preview and read the known issues](https://github.com/jpdevoto/dingo-bench/releases/tag/v0.1.0-macos-preview.1)
+
 1. Extract the entire Windows x64 ZIP to a local folder.
 2. Run `DingoBench.exe` from that folder. Keep the DLLs and resource folders alongside the executable.
 
