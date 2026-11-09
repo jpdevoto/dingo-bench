@@ -1,0 +1,59 @@
+name: macOS network diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: '6.11.3'
+
+jobs:
+  serial-network-tests:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/v0.1.0
+          persist-credentials: false
+      - name: Record the release source, toolchain, and loopback setup
+        run: |
+          git log -1 --format='%H %s'
+          test "$(uname -m)" = arm64
+          sw_vers
+          xcodebuild -version
+          ifconfig lo0
+          route -n get 127.0.0.2 || true
+      - name: Install Qt for macOS
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aqt"
+          "$RUNNER_TEMP/aqt/bin/python" -m pip install aqtinstall==3.2.1
+          "$RUNNER_TEMP/aqt/bin/python" -m aqt install-qt mac desktop "$QT_VERSION" clang_64 \
+            --base https://download.qt.io --outputdir "$RUNNER_TEMP/qt"
+      - name: Build the four test suites and their helpers
+        run: |
+          dcmtk="$RUNNER_TEMP/dingobench-dcmtk"
+          build="$RUNNER_TEMP/dingobench-build"
+          export Qt6_ROOT="$RUNNER_TEMP/qt/$QT_VERSION/macos"
+          python3 scripts/build_dcmtk.py --work "$dcmtk" --jobs 3
+          cmake --preset ci-release -B "$build" -DDCMTK_ROOT="$dcmtk/sdk" \
+            -DDINGOBENCH_DCMTK_TOOLS_DIR="$dcmtk/sdk/bin"
+          cmake --build "$build" --parallel 3 --target dingobench_verification_test \
+            dingobench_storage_test dingobench_receive_test dingobench_worklist_test
+      - name: Run the four networking suites serially
+        run: |
+          build="$RUNNER_TEMP/dingobench-build"
+          ctest --test-dir "$build" --parallel 1 --verbose --no-tests=error \
+            --output-junit "$build/macos-network-tests.xml" \
+            -R '^dicom_(verification|storage_send|storage_receive|worklist_server)$'
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-network-diagnostics
+          path: |
+            ${{ runner.temp }}/dingobench-build/*-qt.txt
+            ${{ runner.temp }}/dingobench-build/macos-network-tests.xml
+            ${{ runner.temp }}/dingobench-build/Testing/Temporary/LastTest.log
